@@ -508,7 +508,7 @@ void parse_assign(void)
 	char *id;
 	ValType t1, proptype, original_proptype;
 	IDPropt *prop;
-	bool is_array, indexed;
+	bool indexed;
 	SourcePos idpos, pos;
 
 	DBG_start("<assign>");
@@ -537,11 +537,8 @@ void parse_assign(void)
 		}
 		proptype ^= TYPE_ARRAY;
 
-		is_array = false;
 		indexed = true;
 		parse_index(id);
-	} else {
-		is_array = IS_ARRAY(prop->type);
 	}
 
 	expect(TOK_EQ);
@@ -593,7 +590,7 @@ void parse_call(void)
 {
 	ValType type;
 	IDPropt *prop;
-	char *id, *routine;
+	char *id;
 	SourcePos idpos;
 
 	DBG_start("<call>");
@@ -755,7 +752,7 @@ void parse_output(void)
  */
 void parse_return(void)
 {
-	ValType t1, t2, type1, type2;
+	ValType t1, t2;
 	SourcePos pos;
 
 	DBG_start("<return>");
@@ -818,7 +815,6 @@ void parse_arglist(char *id, SourcePos idpos)
 	ValType t1;
 	unsigned int i;
 	IDPropt *prop;
-	char *routine;
 	SourcePos pos;
 
 	DBG_start("<arglist>");
@@ -826,11 +822,6 @@ void parse_arglist(char *id, SourcePos idpos)
 	if (!find_name(id, &prop)) {
 		position = idpos;
 		abort_c(ERR_UNKNOWN_IDENTIFIER, id);
-	}
-	if (IS_FUNCTION(prop->type)) {
-		routine = "function";
-	} else {
-		routine = "procedure";
 	}
 	i = 0;
 
@@ -1094,7 +1085,6 @@ void parse_factor(ValType *t0)
 	char *id;
 	IDPropt *prop;
 	SourcePos pos, pos_not;
-	bool is_not;
 
 	DBG_start("<factor>");
 
