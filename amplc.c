@@ -5,7 +5,7 @@
  *
  * All scanning errors are handled in the scanner.  Parser errors MUST be
  * handled by the <code>abort_c</code> function.  System and environment errors
- * -- for example, running out of memory -- MUST be handled in the unit in which
+ * -- for example, running out of memory -MUST be handled in the unit in which
  * they occur.  Transient errors -- for example, nonexistent files, MUST be
  * reported where they occur.  There are no warnings, which is to say, all
  * errors are fatal and MUST cause compilation to terminate with an abnormal
@@ -32,7 +32,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* --- type definitions ----------------------------------------------------- */
+/* --- type definitions --------------------------------------------------- */
 
 /* TODO: Uncomment the following for use during type checking. */
 
@@ -46,7 +46,7 @@ struct variable_s {
 };
 #endif
 
-/* --- debugging ------------------------------------------------------------ */
+/* --- debugging ---------------------------------------------------------- */
 
 #ifdef DEBUG_PARSER
 void debug_start(const char *fmt, ...);
@@ -61,7 +61,7 @@ void debug_info(const char *fmt, ...);
 #define DBG_info(...)
 #endif /* DEBUG_PARSER */
 
-/* --- global variables ----------------------------------------------------- */
+/* --- global variables --------------------------------------------------- */
 
 Token token; /**< the lookahead token type                           */
 #if 1
@@ -70,15 +70,15 @@ ValType return_type; /**< the return type of the current subroutine          */
 
 /* TODO: Uncomment the previous definition for use during type checking. */
 
-/* --- helper macros -------------------------------------------------------- */
+/* --- helper macros ------------------------------------------------------ */
 
-#define STARTS_FACTOR(toktype)                                                 \
-	(toktype == TOK_ID || toktype == TOK_NUM || toktype == TOK_LPAREN ||       \
+#define STARTS_FACTOR(toktype)                                                \
+	(toktype == TOK_ID || toktype == TOK_NUM || toktype == TOK_LPAREN ||      \
 	 toktype == TOK_NOT || toktype == TOK_TRUE || toktype == TOK_FALSE)
 
-#define STARTS_EXPR(toktype)                                                   \
-	(toktype == TOK_MINUS || toktype == TOK_ID || toktype == TOK_NUM ||        \
-	 toktype == TOK_LPAREN || toktype == TOK_NOT || toktype == TOK_TRUE ||     \
+#define STARTS_EXPR(toktype)                                                  \
+	(toktype == TOK_MINUS || toktype == TOK_ID || toktype == TOK_NUM ||       \
+	 toktype == TOK_LPAREN || toktype == TOK_NOT || toktype == TOK_TRUE ||    \
 	 toktype == TOK_FALSE)
 
 #define IS_ADDOP(toktype) (toktype >= TOK_MINUS && toktype <= TOK_PLUS)
@@ -93,7 +93,7 @@ ValType return_type; /**< the return type of the current subroutine          */
 
 #define IS_TYPE(toktype)  (toktype = TOK_BOOL || toktype == TOK_INT)
 
-/* --- function prototypes: parser routines --------------------------------- */
+/* --- function prototypes: parser routines -------------------------------- */
 
 void parse_program(void);
 void parse_subdef(void);
@@ -247,10 +247,6 @@ void parse_program(void)
 
 	parse_body();
 
-	if (token.type != TOK_EOF) {
-		abort_c(ERR_UNREACHABLE, get_token_string(token.type));
-	}
-
 	free(class_name);
 
 	DBG_end("</program>");
@@ -367,6 +363,8 @@ void parse_body(void)
 
 /**
  * type = ("bool" | "int") ["array"] - $
+ * @param t0
+ * 		the type to be parsed
  */
 void parse_type(ValType *t0)
 {
@@ -809,6 +807,10 @@ void parse_while(void)
 
 /**
  * arglist = "(" expr {"," expr} ")" -$
+ * @param id
+ * 		the id of the function
+ * @param idpos
+ * 		the position of the id
  */
 void parse_arglist(char *id, SourcePos idpos)
 {
@@ -878,6 +880,8 @@ void parse_arglist(char *id, SourcePos idpos)
 
 /**
  * index = "[" simple "]" -$
+ * @param id
+ * 		the id of the array
  */
 void parse_index(char *id)
 {
@@ -899,6 +903,8 @@ void parse_index(char *id)
 
 /**
  * expr = simple [relop simple] -$
+ * @param t0
+ * 		the type of the expression
  */
 void parse_expr(ValType *t0)
 {
@@ -952,6 +958,8 @@ void parse_relop(void)
 
 /**
  * simple = ["-"] term {addop term}
+ * @param t0
+ * 		the type of the expression
  */
 void parse_simple(ValType *t0)
 {
@@ -1026,6 +1034,8 @@ void parse_addop(void)
 
 /**
  * term = factor {mulop factor} -$ ?
+ * @param t0
+ * 		the type of the expression
  */
 void parse_term(ValType *t0)
 {
@@ -1079,6 +1089,8 @@ void parse_mulop(void)
 /**
  * factor = id [index | arglist] | num | "(" expr ")" | "not" factor
  * 			| "true" | "false" --$
+ * @param t0
+ * 		the type of the expression
  */
 void parse_factor(ValType *t0)
 {
@@ -1175,6 +1187,18 @@ void parse_string(void)
 /* TODO: Uncomment the following function for use during type checking. */
 
 #if 1
+/**
+ * Checks for valid types
+ *
+ * @param[in] ValType found
+ * 			The type found
+ * @param[in] ValType expected
+ * 			The type expected
+ * @param[in] SourcePos *pos
+ * 			The position of the error
+ * @param[in] ...
+ * 			The message to be printed
+ */
 void chktypes(ValType found, ValType expected, SourcePos *pos, ...)
 {
 	char buf[MAX_MSG_LEN], *s;
@@ -1226,11 +1250,26 @@ void expect_id(char **id)
 	}
 }
 
-/* --- constructors --------------------------------------------------------- */
+/* --- constructors -------------------------------------------------------- */
 
 /* TODO: Uncomment the following two functions for use during type checking. */
 
 #if 1
+/**
+ * Creates a new IDPropt
+ *
+ * @param[in] ValType type
+ * 			The type of the IDPropt
+ * @param[in] unsigned int offset
+ * 			The offset of the IDPropt
+ * @param[in] unsigned int nparams
+ * 			The number of parameters of the IDPropt
+ * @param[in] ValType *params
+ * 			The parameters of the IDPropt
+ *
+ * @return
+ * 		A pointer to the new IDPropt
+ */
 IDPropt *idpropt(ValType type,
                  unsigned int offset,
                  unsigned int nparams,
@@ -1246,6 +1285,19 @@ IDPropt *idpropt(ValType type,
 	return ip;
 }
 
+/**
+ * Creates a new Variable
+ *
+ * @param[in] char *id
+ * 			The id of the Variable
+ * @param[in] ValType type
+ * 			The type of the Variable
+ * @param[in] SourcePos pos
+ * 			The position of the Variable
+ *
+ * @return
+ * 		A pointer to the new Variable
+ */
 Variable *variable(char *id, ValType type, SourcePos pos)
 {
 	Variable *vp = emalloc(sizeof(*vp));
@@ -1259,7 +1311,7 @@ Variable *variable(char *id, ValType type, SourcePos pos)
 }
 #endif
 
-/* --- error handling routines ---------------------------------------------- */
+/* --- error handling routines --------------------------------------------- */
 
 /**
  * handles all errors for parsing and type checking
@@ -1400,7 +1452,7 @@ void abort_cp(SourcePos *posp, Error err, ...)
 	va_end(args);
 }
 
-/* --- debugging output routines -------------------------------------------- */
+/* --- debugging output routines ------------------------------------------- */
 
 #ifdef DEBUG_PARSER
 

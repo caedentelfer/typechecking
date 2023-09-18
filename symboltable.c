@@ -17,7 +17,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* --- global static variables ---------------------------------------------- */
+/* --- global static variables -------------------------------------------- */
 
 static HashTab *table, *saved_table;
 /* TODO: Nothing here, but note that the next variable keeps a running count of
@@ -28,15 +28,18 @@ static HashTab *table, *saved_table;
 static unsigned int curr_offset;
 static unsigned int saved_offset;
 
-/* --- function prototypes -------------------------------------------------- */
+/* --- function prototypes ------------------------------------------------ */
 
 static void valstr(void *key, void *p, char *str);
 static void freeprop(void *p);
 static unsigned int shift_hash(void *key, unsigned int size);
 static int key_strcmp(void *val1, void *val2);
 
-/* --- symbol table interface ----------------------------------------------- */
+/* --- symbol table interface --------------------------------------------- */
 
+/**
+ * @brief   Initialise the symbol table.
+*/
 void init_symbol_table(void)
 {
 	saved_table = NULL;
@@ -46,11 +49,17 @@ void init_symbol_table(void)
 	curr_offset = 1;
 }
 
+/**
+ * @brief   Open a new subroutine scope.
+ * @param   id    the name of the subroutine
+ * @param   prop  the properties of the subroutine
+ * @return  TRUE if the subroutine was successfully opened, FALSE otherwise
+ */
 Boolean open_subroutine(char *id, IDPropt *prop)
 {
 	/* TODO:
-	 * - Insert the subroutine name into the global symbol table; return TRUE or
-	 *   FALSE, depending on whether or not the insertion succeeded.
+	 * - Insert the subroutine name into the global symbol table; return TRUE
+	 *   or FALSE, depending on whether or not the insertion succeeded.
 	 * - Save the global symbol table to `saved_table`, initialise a new hash
 	 *   table for the subroutine, and reset the current offset.
 	 */
@@ -74,6 +83,9 @@ Boolean open_subroutine(char *id, IDPropt *prop)
 	return TRUE;
 }
 
+/**
+ * @brief   Close the current subroutine scope.
+ */
 void close_subroutine(void)
 {
 	/* TODO: Release the subroutine table, and reactivate the global table. */
@@ -85,6 +97,12 @@ void close_subroutine(void)
 	curr_offset = 1;
 }
 
+/**
+ * @brief   Insert the properties of the identifier into the symbol table.
+ * @param   id    the name of the identifier
+ * @param   prop  the properties of the identifier
+ * @return  TRUE if the insertion was successful, FALSE otherwise
+ */
 Boolean insert_name(char *id, IDPropt *prop)
 {
 	/* TODO: Insert the properties of the identifier into the hash table, and
@@ -116,6 +134,12 @@ Boolean insert_name(char *id, IDPropt *prop)
 	return TRUE;
 }
 
+/**
+ * @brief   Find the properties of the identifier in the symbol table.
+ * @param   id    the name of the identifier
+ * @param   prop  the properties of the identifier
+ * @return  TRUE if the identifier was found, FALSE otherwise
+ */
 Boolean find_name(char *id, IDPropt **prop)
 {
 	*prop = ht_search(table, id);
@@ -129,11 +153,18 @@ Boolean find_name(char *id, IDPropt **prop)
 	return (*prop ? TRUE : FALSE);
 }
 
+/**
+ * @brief   Get the width of the local variable array of the current subroutine
+ * @return  the width of the local variable array
+ */
 int get_variables_width(void)
 {
 	return curr_offset;
 }
 
+/**
+ * @brief   Release the symbol table.
+ */
 void release_symbol_table(void)
 {
 	if (table != NULL) {
@@ -142,13 +173,21 @@ void release_symbol_table(void)
 	}
 }
 
+/**
+ * @brief   Print the symbol table.
+ */
 void print_symbol_table(void)
 {
 	ht_print(table, valstr);
 }
 
-/* --- utility functions ---------------------------------------------------- */
+/* --- utility functions -------------------------------------------------- */
 
+/**
+ * @brief   Get the string representation of the value type.
+ * @param   type  the value type
+ * @return  the string representation of the value type
+ */
 static void valstr(void *key, void *p, char *str)
 {
 	char *keystr = (char *) key;
@@ -167,11 +206,15 @@ static void valstr(void *key, void *p, char *str)
 }
 
 /* TODO: Here you should add your own utility functions, in particular, for
- * deallocation, hashing, and key comparison.  For hashing, you MUST NOT use the
+ * deallocation, hashing, and key comparison. For hashing, you MUST NOT use the
  * simply strategy of summing the integer values of characters.  I suggest you
  * use some kind of cyclic bit shift hash.
  */
 
+/**
+ * @brief   Free the memory allocated to the properties of the identifier.
+ * @param   p  the properties of the identifier
+ */
 static void freeprop(void *p)
 {
 	IDPropt *idpp = (IDPropt *) p;
@@ -185,6 +228,12 @@ static void freeprop(void *p)
 	}
 }
 
+/**
+ * @brief   Hash the key.
+ * @param   key   the key
+ * @param   size  the size of the hash table
+ * @return  the hash value of the key
+ */
 static unsigned int shift_hash(void *key, unsigned int size)
 {
 #ifdef DEBUG_SYMBOL_TABLE
@@ -215,6 +264,12 @@ static unsigned int shift_hash(void *key, unsigned int size)
 #endif /* DEBUG_SYMBOL_TABLE */
 }
 
+/**
+ * @brief   Compare two keys.
+ * @param   val1  the first key
+ * @param   val2  the second key
+ * @return  the result of the comparison
+ */
 static int key_strcmp(void *val1, void *val2)
 {
 	char *key1 = (char *) val1;
