@@ -548,6 +548,7 @@ void parse_assign(void)
 		proptype ^= TYPE_ARRAY;
 
 		indexed = true;
+		gen_2(JVM_ALOAD, prop->offset);
 		parse_index(id);
 	}
 
@@ -558,37 +559,20 @@ void parse_assign(void)
 	if (STARTS_EXPR(token.type)) {
 		parse_expr(&t1);
 
-		if (IS_ARRAY(prop->type)) {
-			gen_2(JVM_ASTORE, prop->offset);
-		}
+        if (indexed) {
+            // Assuming that the array and index have already been loaded to the stack by parse_index(id);
+            gen_1(JVM_IASTORE);  // stores the result into the array at the given index
+        } else {
+            // If it's a simple assignment, just store the result
+            if (IS_ARRAY(prop->type)) {
+                gen_2(JVM_ASTORE, prop->offset);
+            } else if (IS_INTEGER_TYPE(prop->type)) {
+                gen_2(JVM_ISTORE, prop->offset);
+            } else if (IS_BOOLEAN_TYPE(prop->type)) {
+                gen_2(JVM_ISTORE, prop->offset);
+            }
+        }
 
-		if (IS_ARRAY(prop->type) && !indexed) {
-			gen_2(JVM_ISTORE, prop->offset);
-		}
-
-		if (indexed) {
-			gen_1(JVM_IASTORE);
-		}
-
-		/*
-		if (indexed) {
-			if (!IS_ARRAY(t1)) {
-				chktypes(t1, proptype, &pos,
-				         "for allocation to indexed array '%s'", id);
-			}
-		} else {
-			if (IS_ARRAY(t1) != IS_ARRAY(original_proptype)) {
-				chktypes(t1, original_proptype, &pos, "for assignment to '%s'",
-				         id);
-			}
-		}
-
-		if (IS_INTEGER_TYPE(proptype) && !IS_INTEGER_TYPE(t1)) {
-			chktypes(t1, proptype, &pos, "for assignment to '%s'", id);
-		} else if (IS_BOOLEAN_TYPE(proptype) && !IS_BOOLEAN_TYPE(t1)) {
-			chktypes(t1, proptype, &pos, "for assignment to '%s'", id);
-		}
-		*/
 	} else if (token.type == TOK_ARRAY) {
 
 		if (!IS_ARRAY(original_proptype)) {
@@ -658,47 +642,63 @@ void parse_if(void)
 {
 	ValType t1;
 	SourcePos pos;
-	int label_1, label_2, label_3;
+	bool elif, eflag;
+	int label_1, label_2, label_3, temp;
 
 	DBG_start("<if>");
 
 	label_1 = get_label();
 	label_2 = get_label();
-	label_3 = get_label();
+	elif = false;
+	eflag = false;
 
 	expect(TOK_IF);
 	pos = position;
 	parse_expr(&t1);
-	gen_2_label(JVM_IFEQ, label_1);
+	gen_2_label(JVM_IFEQ, label_2);
 	chktypes(t1, TYPE_BOOLEAN, &pos, "for 'if' guard");
 	expect(TOK_COLON);
 	parse_statements();
-	gen_2_label(JVM_GOTO, label_3);
+	gen_2_label(JVM_GOTO, label_1);
 
-	gen_label(label_1);
 	while (token.type == TOK_ELIF) {
+		elif = true;
+		label_3 = label_2 + 1;
 		gen_label(label_2);
 		get_token(&token);
 		pos = position;
 		parse_expr(&t1);
-		gen_2_label(JVM_IFEQ, label_2);
+		gen_2_label(JVM_IFEQ, label_3);
 		chktypes(t1, TYPE_BOOLEAN, &pos, "for 'elif' guard");
 		expect(TOK_COLON);
 		parse_statements();
-		gen_2_label(JVM_GOTO, label_3);
+		gen_2_label(JVM_GOTO, label_1);
+		label_2 = get_label();
 	}
+
+	if (elif) {
+		label_3 = label_2;
+	}
+
+	if (token.type != TOK_ELSE) {
+		label_3 = label_2;
+	}
+
 
 	if (token.type == TOK_ELSE) {
 		DBG_start("<else>");
-
+		eflag =true;
 		get_token(&token);
 		expect(TOK_COLON);
+		gen_label(label_3);
 		parse_statements();
 
 		DBG_end("</else>");
+	} else {
+		gen_label(label_3);
 	}
 
-	gen_label(label_3);
+	gen_label(label_1);
 	expect(TOK_END);
 
 	DBG_end("</if>");
@@ -730,6 +730,7 @@ void parse_input(void)
 			position = pos;
 			abort_c(ERR_NOT_AN_ARRAY, id);
 		}
+		gen_2(JVM_ALOAD, prop->offset);
 		parse_index(id);
 	} else if (IS_ARRAY(prop->type)) {
 		position = pos;
@@ -743,7 +744,7 @@ void parse_input(void)
 	}
 
 	if (IS_ARRAY_TYPE(prop->type)) {
-		gen_2(JVM_IASTORE, prop->offset);
+		gen_1(JVM_IASTORE);
 	} else {
 		gen_2(JVM_ISTORE, prop->offset);
 	}
@@ -772,11 +773,11 @@ void parse_output(void)
 		parse_string();
 	} else if (STARTS_EXPR(token.type)) {
 		parse_expr(&t1);
-		gen_print(t1);
 		if (IS_ARRAY(t1)) {
 			position = pos;
 			abort_c(ERR_ILLEGAL_ARRAY_OPERATION, "'output'");
 		}
+		gen_print(t1);
 	} else {
 		abort_c(ERR_EXPECTED_EXPRESSION_OR_STRING);
 	}
@@ -1219,6 +1220,7 @@ void parse_factor(ValType *t0)
 					abort_c(ERR_NOT_AN_ARRAY, id);
 				}
 				*t0 = prop->type & 6;
+				gen_2(JVM_ALOAD, prop->offset);
 				parse_index(id);
 				gen_1(JVM_IALOAD);
 			} else if (token.type == TOK_LPAREN) {
@@ -1239,8 +1241,8 @@ void parse_factor(ValType *t0)
 			}
 			break;
 		case TOK_NUM:
-			gen_2(JVM_LDC, token.value);
 			*t0 = TYPE_INTEGER;
+			gen_2(JVM_LDC, token.value);
 			get_token(&token);
 			break;
 		case TOK_LPAREN:
