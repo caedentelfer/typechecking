@@ -25,6 +25,7 @@
 #include "symboltable.h"
 #include "token.h"
 #include "valtypes.h"
+#include "codegen.h"
 
 #include <ctype.h>
 #include <limits.h>
@@ -158,7 +159,7 @@ void abort_cp(SourcePos *posp, Error err, ...);
  */
 int main(int argc, char *argv[])
 {
-#if 0
+#if 1
 	char *jasmin_path;
 #endif
 	FILE *src_file;
@@ -173,36 +174,41 @@ int main(int argc, char *argv[])
 		eprintf("usage: %s <filename>", getprogname());
 	}
 
-	/* TODO: Uncomment the following code for code generation:
+	/* TODO: Uncomment the following code for code generation: */
 	if ((jasmin_path = getenv("JASMIN_JAR")) == NULL) {
 	    eprintf("JASMIN_JAR environment variable not set");
 	}
-	*/
-
-	setsrcname(argv[1]);
 
 	/* open the source file, and report an error if it cannot be opened */
 	if ((src_file = fopen(argv[1], "r")) == NULL) {
 		eprintf("file '%s' could not be opened:", argv[1]);
 	}
 
+	setsrcname(argv[1]);
+
 	/* initialise all compiler units */
 	init_scanner(src_file);
 	init_symbol_table();
+	init_code_generation();
 
 	/* compile */
 	get_token(&token);
 	parse_program();
 
 	/* produce the object code, and assemble */
-	/* TODO: Add calls for code generation. */
+	make_code_file();
+	assemble(jasmin_path);
+
+	#ifdef DEBUG_CODEGEN
+		list_code();
+	#endif
 
 	/* release all allocated resources */
-	/* TODO: Release the resources of the symbol table and code generation. */
 	fclose(src_file);
 	freeprogname();
 	freesrcname();
 	release_symbol_table();
+	release_code_generation();
 
 #ifdef DEBUG_PARSER
 	printf("Success!\n");
@@ -236,6 +242,7 @@ void parse_program(void)
 	expect(TOK_PROGRAM);
 
 	expect_id(&class_name);
+	set_class_name(class_name);
 	expect(TOK_COLON);
 
 	while (token.type == TOK_ID) {
@@ -245,7 +252,10 @@ void parse_program(void)
 	expect(TOK_MAIN);
 	expect(TOK_COLON);
 
+	init_subroutine_codegen("main", NULL);
 	parse_body();
+	gen_1(JVM_RETURN);
+	close_subroutine_codegen(get_variables_width());
 
 	free(class_name);
 
@@ -334,7 +344,9 @@ void parse_subdef(void)
 			temp = NULL;
 		}
 		expect(TOK_COLON);
+		init_subroutine_codegen(subid, prop);
 		parse_body();
+		close_subroutine_codegen(get_variables_width());
 		close_subroutine();
 		return_type = TYPE_NONE;
 	} else {
@@ -546,6 +558,19 @@ void parse_assign(void)
 	if (STARTS_EXPR(token.type)) {
 		parse_expr(&t1);
 
+		if (IS_ARRAY(prop->type)) {
+			gen_2(JVM_ASTORE, prop->offset);
+		}
+
+		if (IS_ARRAY(prop->type) && !indexed) {
+			gen_2(JVM_ISTORE, prop->offset);
+		}
+
+		if (indexed) {
+			gen_1(JVM_IASTORE);
+		}
+
+		/*
 		if (indexed) {
 			if (!IS_ARRAY(t1)) {
 				chktypes(t1, proptype, &pos,
@@ -563,6 +588,7 @@ void parse_assign(void)
 		} else if (IS_BOOLEAN_TYPE(proptype) && !IS_BOOLEAN_TYPE(t1)) {
 			chktypes(t1, proptype, &pos, "for assignment to '%s'", id);
 		}
+		*/
 	} else if (token.type == TOK_ARRAY) {
 
 		if (!IS_ARRAY(original_proptype)) {
@@ -574,6 +600,8 @@ void parse_assign(void)
 		pos = position;
 		parse_simple(&t1);
 		chktypes(t1, TYPE_INTEGER, &pos, "for array size of '%s'", id);
+		gen_newarray(T_INT);
+		gen_2(JVM_ASTORE, prop->offset);
 	} else {
 		abort_c(ERR_EXPECTED_EXPRESSION_OR_ARRAY_ALLOCATION);
 	}
@@ -617,6 +645,7 @@ void parse_call(void)
 	}
 
 	parse_arglist(id, idpos);
+	gen_call(id, prop);
 
 	DBG_end("</call>");
 }
@@ -629,33 +658,47 @@ void parse_if(void)
 {
 	ValType t1;
 	SourcePos pos;
+	int label_1, label_2, label_3;
 
 	DBG_start("<if>");
+
+	label_1 = get_label();
+	label_2 = get_label();
+	label_3 = get_label();
 
 	expect(TOK_IF);
 	pos = position;
 	parse_expr(&t1);
+	gen_2_label(JVM_IFEQ, label_1);
 	chktypes(t1, TYPE_BOOLEAN, &pos, "for 'if' guard");
 	expect(TOK_COLON);
 	parse_statements();
+	gen_2_label(JVM_GOTO, label_3);
 
+	gen_label(label_1);
 	while (token.type == TOK_ELIF) {
+		gen_label(label_2);
 		get_token(&token);
 		pos = position;
 		parse_expr(&t1);
+		gen_2_label(JVM_IFEQ, label_2);
 		chktypes(t1, TYPE_BOOLEAN, &pos, "for 'elif' guard");
 		expect(TOK_COLON);
 		parse_statements();
+		gen_2_label(JVM_GOTO, label_3);
 	}
 
 	if (token.type == TOK_ELSE) {
 		DBG_start("<else>");
+
 		get_token(&token);
 		expect(TOK_COLON);
 		parse_statements();
+
 		DBG_end("</else>");
 	}
 
+	gen_label(label_3);
 	expect(TOK_END);
 
 	DBG_end("</if>");
@@ -693,6 +736,18 @@ void parse_input(void)
 		abort_c(ERR_EXPECTED_SCALAR);
 	}
 
+	if (IS_INTEGER_TYPE(prop->type)) {
+		gen_read(TYPE_INTEGER);
+	} else if (IS_BOOLEAN_TYPE(prop->type)) {
+		gen_read(TYPE_BOOLEAN);
+	}
+
+	if (IS_ARRAY_TYPE(prop->type)) {
+		gen_2(JVM_IASTORE, prop->offset);
+	} else {
+		gen_2(JVM_ISTORE, prop->offset);
+	}
+
 	expect(TOK_RPAREN);
 
 	DBG_end("</input>");
@@ -713,9 +768,11 @@ void parse_output(void)
 	expect(TOK_LPAREN);
 
 	if (token.type == TOK_STR) {
+		gen_print_string(token.string);
 		parse_string();
 	} else if (STARTS_EXPR(token.type)) {
 		parse_expr(&t1);
+		gen_print(t1);
 		if (IS_ARRAY(t1)) {
 			position = pos;
 			abort_c(ERR_ILLEGAL_ARRAY_OPERATION, "'output'");
@@ -728,9 +785,11 @@ void parse_output(void)
 		pos = position;
 		get_token(&token);
 		if (token.type == TOK_STR) {
+			gen_print_string(token.string);
 			parse_string();
 		} else if (STARTS_EXPR(token.type)) {
 			parse_expr(&t1);
+			gen_print(t1);
 			if (IS_ARRAY(t1)) {
 				position = pos;
 				abort_c(ERR_ILLEGAL_ARRAY_OPERATION, "'output'");
@@ -769,9 +828,14 @@ void parse_return(void)
 		} else if (IS_FUNCTION(return_type)) {
 			pos = position;
 			parse_expr(&t1);
+			if (IS_ARRAY_TYPE(return_type)) {
+				gen_1(JVM_ARETURN);
+			} else {
+				gen_1(JVM_IRETURN);
+			}
 			t2 = return_type;
 			SET_RETURN_TYPE(t2);
-			SET_RETURN_TYPE(t1);
+			SET_RETURN_TYPE(t1); /* ? */
 			chktypes(t1, t2, &pos, "for 'return' statement");
 		}
 	} else if (IS_FUNCTION(return_type)) {
@@ -779,6 +843,8 @@ void parse_return(void)
 		abort_c(ERR_MISSING_RETURN_EXPRESSION);
 	} else if (IS_PROCEDURE(return_type)) {
 		abort_c(ERR_RETURN_EXPRESSION_NOT_ALLOWED);
+	} else {
+		gen_1(JVM_RETURN);
 	}
 
 	DBG_end("</return>");
@@ -791,16 +857,24 @@ void parse_while(void)
 {
 	ValType t1;
 	SourcePos pos;
+	int label_1, label_2;
 
 	DBG_start("<while>");
 
+	label_1 = get_label();
+	label_2 = get_label();
+
 	expect(TOK_WHILE);
 	pos = position;
+	gen_label(label_1);
 	parse_expr(&t1);
+	gen_2_label(JVM_IFEQ, label_2);
 	chktypes(t1, TYPE_BOOLEAN, &pos, "for 'while' guard");
 	expect(TOK_COLON);
 	parse_statements();
 	expect(TOK_END);
+	gen_2_label(JVM_GOTO, label_1);
+	gen_label(label_2);
 
 	DBG_end("</while>");
 }
@@ -934,11 +1008,35 @@ void parse_expr(ValType *t0)
 			chktypes(t1, t2, &pos, "for operator %s",
 			         get_token_string(toktype));
 			*t0 = TYPE_BOOLEAN;
+
+			if (toktype == TOK_EQ) {
+				gen_cmp(JVM_IF_ICMPEQ);
+			} else {
+				gen_cmp(JVM_IF_ICMPNE);
+			}
+
 		} else {
 			chktypes(t1, TYPE_INTEGER, &pos, "for operator %s",
 			         get_token_string(toktype));
 			chktypes(t2, TYPE_INTEGER, &pos, "for operator %s",
 			         get_token_string(toktype));
+
+			switch (toktype) {
+				case TOK_GE:
+					gen_cmp(JVM_IF_ICMPGE);
+					break;
+				case TOK_GT:
+					gen_cmp(JVM_IF_ICMPGT);
+					break;
+				case TOK_LE:
+					gen_cmp(JVM_IF_ICMPLE);
+					break;
+				case TOK_LT:
+					gen_cmp(JVM_IF_ICMPLT);
+					break;
+				default:
+					abort_c(ERR_UNREACHABLE);
+			}
 			*t0 = TYPE_BOOLEAN;
 		}
 	} else {
@@ -963,62 +1061,51 @@ void parse_relop(void)
  */
 void parse_simple(ValType *t0)
 {
-	ValType t1;
-	SourcePos pos, pos2;
-	TokenType toktype;
+    ValType t1;
+    SourcePos pos;
+    TokenType toktype;
 
-	DBG_start("<simple>");
+    DBG_start("<simple>");
 
-	t1 = 0;
-	if (token.type == TOK_MINUS) {
-		pos = position;
-		get_token(&token);
-		pos2 = pos;
-		parse_term(t0);
-		if (IS_ARRAY(*t0)) {
-			position = pos;
-			abort_c(ERR_ILLEGAL_ARRAY_OPERATION, "unary minus");
-		}
-		pos = position;
-		pos2.col++;
-		chktypes(*t0, TYPE_INTEGER, &pos2, "for unary minus");
-	} else {
-		parse_term(t0);
-		if (IS_ADDOP(token.type)) {
-			if (IS_ARRAY(*t0)) {
-				abort_c(ERR_ILLEGAL_ARRAY_OPERATION,
-				        get_token_string(token.type));
-			}
-		}
+    if (token.type == TOK_MINUS) {
+        pos = position;
+        get_token(&token);
+        parse_term(t0);
+        gen_1(JVM_INEG);
+        if (IS_ARRAY(*t0)) {
+            pos.col++;
+            chktypes(*t0, TYPE_INTEGER, &pos, "for unary minus");
+        }
+    } else {
+        parse_term(t0);
+    }
 
-		while (IS_ADDOP(token.type)) {
-			toktype = token.type;
-			pos = position;
-			get_token(&token);
-			parse_term(&t1);
-			if (IS_ARRAY(t1)) {
-				position = pos;
-				abort_c(ERR_ILLEGAL_ARRAY_OPERATION, get_token_string(toktype));
-			}
-			if (toktype == TOK_OR) {
-				chktypes(*t0, TYPE_BOOLEAN, &pos, "for operator %s",
-				         get_token_string(toktype));
-				chktypes(t1, TYPE_BOOLEAN, &pos, "for operator %s",
-				         get_token_string(toktype));
-			} else {
-				if (!IS_INTEGER_TYPE(*t0)) {
-					chktypes(*t0, TYPE_INTEGER, &pos, "for operator %s",
-					         get_token_string(toktype));
-				}
-				if (!IS_INTEGER_TYPE(t1)) {
-					chktypes(t1, TYPE_INTEGER, &pos, "for operator %s",
-					         get_token_string(toktype));
-				}
-			}
-		}
-	}
-	DBG_end("</simple>");
+    while (IS_ADDOP(token.type)) {
+        toktype = token.type;
+        pos = position;
+        get_token(&token);
+        parse_term(&t1);
+
+        if (IS_ARRAY(t1) || IS_ARRAY(*t0)) {
+            abort_c(ERR_ILLEGAL_ARRAY_OPERATION, get_token_string(toktype));
+        }
+
+        if (toktype == TOK_OR) {
+            chktypes(*t0, TYPE_BOOLEAN, &pos, "for operator %s", get_token_string(toktype));
+            chktypes(t1, TYPE_BOOLEAN, &pos, "for operator %s", get_token_string(toktype));
+            gen_1(JVM_IOR);
+        } else {
+            if (toktype == TOK_PLUS) {
+                gen_1(JVM_IADD);
+            } else {
+                gen_1(JVM_ISUB);
+            }
+        }
+    }
+
+    DBG_end("</simple>");
 }
+
 
 /**
  * addop = "-" | "or" | "+"
@@ -1067,11 +1154,26 @@ void parse_term(ValType *t0)
 			         get_token_string(toktype));
 			chktypes(t1, TYPE_BOOLEAN, &pos, "for operator %s",
 			         get_token_string(toktype));
+			gen_1(JVM_IAND);
 		} else {
 			chktypes(*t0, TYPE_INTEGER, &pos, "for operator %s",
 			         get_token_string(toktype));
 			chktypes(t1, TYPE_INTEGER, &pos, "for operator %s",
 			         get_token_string(toktype));
+
+			switch (toktype) {
+				case TOK_DIV:
+					gen_1(JVM_IDIV);
+					break;
+				case TOK_MUL:
+					gen_1(JVM_IMUL);
+					break;
+				case TOK_REM:
+					gen_1(JVM_IREM);
+					break;
+				default:
+					abort_c(ERR_UNREACHABLE);
+			}
 		}
 	}
 
@@ -1118,6 +1220,7 @@ void parse_factor(ValType *t0)
 				}
 				*t0 = prop->type & 6;
 				parse_index(id);
+				gen_1(JVM_IALOAD);
 			} else if (token.type == TOK_LPAREN) {
 				if (!IS_FUNCTION(prop->type)) {
 					position = pos;
@@ -1125,11 +1228,18 @@ void parse_factor(ValType *t0)
 				}
 				*t0 = (prop->type & 6) ^ TYPE_CALLABLE;
 				parse_arglist(id, pos);
+				gen_call(id, prop);
 			} else {
 				*t0 = prop->type;
+				if (IS_ARRAY_TYPE(*t0)) {
+					gen_2(JVM_ALOAD, prop->offset);
+				} else {
+					gen_2(JVM_ILOAD, prop->offset);
+				}
 			}
 			break;
 		case TOK_NUM:
+			gen_2(JVM_LDC, token.value);
 			*t0 = TYPE_INTEGER;
 			get_token(&token);
 			break;
@@ -1148,12 +1258,16 @@ void parse_factor(ValType *t0)
 				abort_c(ERR_ILLEGAL_ARRAY_OPERATION, "'not'");
 			}
 			chktypes(*t0, TYPE_BOOLEAN, &pos, "for 'not'");
+			gen_2(JVM_LDC, 1);
+			gen_1(JVM_IXOR);
 			break;
 		case TOK_TRUE:
+			gen_2(JVM_LDC, 1);
 			*t0 = TYPE_BOOLEAN;
 			expect(TOK_TRUE);
 			break;
 		case TOK_FALSE:
+			gen_2(JVM_LDC, 0);
 			*t0 = TYPE_BOOLEAN;
 			expect(TOK_FALSE);
 			break;
