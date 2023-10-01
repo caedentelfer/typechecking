@@ -17,6 +17,7 @@
  */
 
 #include "boolean.h"
+#include "codegen.h"
 #include "errmsg.h"
 #include "error.h"
 #include "hashtable.h"
@@ -25,7 +26,6 @@
 #include "symboltable.h"
 #include "token.h"
 #include "valtypes.h"
-#include "codegen.h"
 
 #include <ctype.h>
 #include <limits.h>
@@ -73,13 +73,13 @@ ValType return_type; /**< the return type of the current subroutine          */
 
 /* --- helper macros ------------------------------------------------------ */
 
-#define STARTS_FACTOR(toktype)                                                \
-	(toktype == TOK_ID || toktype == TOK_NUM || toktype == TOK_LPAREN ||      \
+#define STARTS_FACTOR(toktype)                                                 \
+	(toktype == TOK_ID || toktype == TOK_NUM || toktype == TOK_LPAREN ||       \
 	 toktype == TOK_NOT || toktype == TOK_TRUE || toktype == TOK_FALSE)
 
-#define STARTS_EXPR(toktype)                                                  \
-	(toktype == TOK_MINUS || toktype == TOK_ID || toktype == TOK_NUM ||       \
-	 toktype == TOK_LPAREN || toktype == TOK_NOT || toktype == TOK_TRUE ||    \
+#define STARTS_EXPR(toktype)                                                   \
+	(toktype == TOK_MINUS || toktype == TOK_ID || toktype == TOK_NUM ||        \
+	 toktype == TOK_LPAREN || toktype == TOK_NOT || toktype == TOK_TRUE ||     \
 	 toktype == TOK_FALSE)
 
 #define IS_ADDOP(toktype) (toktype >= TOK_MINUS && toktype <= TOK_PLUS)
@@ -141,9 +141,10 @@ void expect_id(char **id);
 
 #if 1
 IDPropt *idpropt(ValType type,
-                 unsigned int offset,
-                 unsigned int nparams,
-                 ValType *params);
+unsigned int offset,
+unsigned int nparams,
+ValType *params);
+
 Variable *variable(char *id, ValType type, SourcePos pos);
 #endif
 
@@ -176,7 +177,7 @@ int main(int argc, char *argv[])
 
 	/* TODO: Uncomment the following code for code generation: */
 	if ((jasmin_path = getenv("JASMIN_JAR")) == NULL) {
-	    eprintf("JASMIN_JAR environment variable not set");
+		eprintf("JASMIN_JAR environment variable not set");
 	}
 
 	/* open the source file, and report an error if it cannot be opened */
@@ -199,9 +200,9 @@ int main(int argc, char *argv[])
 	make_code_file();
 	assemble(jasmin_path);
 
-	#ifdef DEBUG_CODEGEN
-		list_code();
-	#endif
+#ifdef DEBUG_CODEGEN
+	list_code();
+#endif
 
 	/* release all allocated resources */
 	fclose(src_file);
@@ -226,6 +227,7 @@ void parse_program(void)
 {
 	char *class_name;
 	SourcePos origin;
+	bool flag;
 
 	DBG_start("<program>");
 
@@ -236,6 +238,8 @@ void parse_program(void)
 
 	origin.line = 1;
 	origin.col = 0;
+	flag = false;
+
 	if (token.type == TOK_EOF) {
 		abort_cp(&origin, ERR_EXPECT, TOK_PROGRAM);
 	}
@@ -245,15 +249,20 @@ void parse_program(void)
 	set_class_name(class_name);
 	expect(TOK_COLON);
 
-	while (token.type == TOK_ID) {
-		parse_subdef();
+	while (token.type != TOK_MAIN) {
+		if (token.type == TOK_ID) {
+			flag = true;
+		}
+		get_token(&token);
 	}
 
 	expect(TOK_MAIN);
 	expect(TOK_COLON);
 
 	init_subroutine_codegen("main", NULL);
-	parse_body();
+	if (!flag) {
+		parse_body();
+	}
 	gen_1(JVM_RETURN);
 	close_subroutine_codegen(get_variables_width());
 
@@ -559,19 +568,17 @@ void parse_assign(void)
 	if (STARTS_EXPR(token.type)) {
 		parse_expr(&t1);
 
-        if (indexed) {
-            // Assuming that the array and index have already been loaded to the stack by parse_index(id);
-            gen_1(JVM_IASTORE);  // stores the result into the array at the given index
-        } else {
-            // If it's a simple assignment, just store the result
-            if (IS_ARRAY(prop->type)) {
-                gen_2(JVM_ASTORE, prop->offset);
-            } else if (IS_INTEGER_TYPE(prop->type)) {
-                gen_2(JVM_ISTORE, prop->offset);
-            } else if (IS_BOOLEAN_TYPE(prop->type)) {
-                gen_2(JVM_ISTORE, prop->offset);
-            }
-        }
+		if (indexed) {
+			gen_1(JVM_IASTORE);
+		} else {
+			if (IS_ARRAY(prop->type)) {
+				gen_2(JVM_ASTORE, prop->offset);
+			} else if (IS_INTEGER_TYPE(prop->type)) {
+				gen_2(JVM_ISTORE, prop->offset);
+			} else if (IS_BOOLEAN_TYPE(prop->type)) {
+				gen_2(JVM_ISTORE, prop->offset);
+			}
+		}
 
 	} else if (token.type == TOK_ARRAY) {
 
@@ -642,15 +649,14 @@ void parse_if(void)
 {
 	ValType t1;
 	SourcePos pos;
-	bool elif, eflag;
-	int label_1, label_2, label_3, temp;
+	bool elif;
+	int label_1, label_2, label_3;
 
 	DBG_start("<if>");
 
 	label_1 = get_label();
 	label_2 = get_label();
 	elif = false;
-	eflag = false;
 
 	expect(TOK_IF);
 	pos = position;
@@ -684,10 +690,8 @@ void parse_if(void)
 		label_3 = label_2;
 	}
 
-
 	if (token.type == TOK_ELSE) {
 		DBG_start("<else>");
-		eflag =true;
 		get_token(&token);
 		expect(TOK_COLON);
 		gen_label(label_3);
@@ -1062,51 +1066,52 @@ void parse_relop(void)
  */
 void parse_simple(ValType *t0)
 {
-    ValType t1;
-    SourcePos pos;
-    TokenType toktype;
+	ValType t1;
+	SourcePos pos;
+	TokenType toktype;
 
-    DBG_start("<simple>");
+	DBG_start("<simple>");
 
-    if (token.type == TOK_MINUS) {
-        pos = position;
-        get_token(&token);
-        parse_term(t0);
-        gen_1(JVM_INEG);
-        if (IS_ARRAY(*t0)) {
-            pos.col++;
-            chktypes(*t0, TYPE_INTEGER, &pos, "for unary minus");
-        }
-    } else {
-        parse_term(t0);
-    }
+	if (token.type == TOK_MINUS) {
+		pos = position;
+		get_token(&token);
+		parse_term(t0);
+		gen_1(JVM_INEG);
+		if (IS_ARRAY(*t0)) {
+			pos.col++;
+			chktypes(*t0, TYPE_INTEGER, &pos, "for unary minus");
+		}
+	} else {
+		parse_term(t0);
+	}
 
-    while (IS_ADDOP(token.type)) {
-        toktype = token.type;
-        pos = position;
-        get_token(&token);
-        parse_term(&t1);
+	while (IS_ADDOP(token.type)) {
+		toktype = token.type;
+		pos = position;
+		get_token(&token);
+		parse_term(&t1);
 
-        if (IS_ARRAY(t1) || IS_ARRAY(*t0)) {
-            abort_c(ERR_ILLEGAL_ARRAY_OPERATION, get_token_string(toktype));
-        }
+		if (IS_ARRAY(t1) || IS_ARRAY(*t0)) {
+			abort_c(ERR_ILLEGAL_ARRAY_OPERATION, get_token_string(toktype));
+		}
 
-        if (toktype == TOK_OR) {
-            chktypes(*t0, TYPE_BOOLEAN, &pos, "for operator %s", get_token_string(toktype));
-            chktypes(t1, TYPE_BOOLEAN, &pos, "for operator %s", get_token_string(toktype));
-            gen_1(JVM_IOR);
-        } else {
-            if (toktype == TOK_PLUS) {
-                gen_1(JVM_IADD);
-            } else {
-                gen_1(JVM_ISUB);
-            }
-        }
-    }
+		if (toktype == TOK_OR) {
+			chktypes(*t0, TYPE_BOOLEAN, &pos, "for operator %s",
+			         get_token_string(toktype));
+			chktypes(t1, TYPE_BOOLEAN, &pos, "for operator %s",
+			         get_token_string(toktype));
+			gen_1(JVM_IOR);
+		} else {
+			if (toktype == TOK_PLUS) {
+				gen_1(JVM_IADD);
+			} else {
+				gen_1(JVM_ISUB);
+			}
+		}
+	}
 
-    DBG_end("</simple>");
+	DBG_end("</simple>");
 }
-
 
 /**
  * addop = "-" | "or" | "+"
@@ -1387,9 +1392,9 @@ void expect_id(char **id)
  * 		A pointer to the new IDPropt
  */
 IDPropt *idpropt(ValType type,
-                 unsigned int offset,
-                 unsigned int nparams,
-                 ValType *params)
+unsigned int offset,
+unsigned int nparams,
+ValType *params)
 {
 	IDPropt *ip = emalloc(sizeof(*ip));
 
